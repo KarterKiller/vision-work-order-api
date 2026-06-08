@@ -1,6 +1,0 @@
-http:
-  port: "8081"
-
-google:
-  vision:
-    key: "AIzaSyCI485UOkMcsvzPVgH4hL3t_9NkMtteakc"
