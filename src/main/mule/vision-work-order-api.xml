@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd 
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd 
+        http://www.mulesoft.org/schema/mule/core
+        http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http
+        http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/ee/core
+        http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <configuration-properties file="properties.yaml" doc:name="Properties" />
+
+    <http:listener-config name="HTTP_Listener_config" doc:name="HTTP Listener config">
+        <http:listener-connection host="0.0.0.0" port="${http.port}" />
+    </http:listener-config>
+
+    <http:request-config name="Google_Vision_Config" doc:name="Google Vision Config">
+        <http:request-connection host="vision.googleapis.com" port="443" protocol="HTTPS" />
+    </http:request-config>
+
+    <flow name="analyze-image-flow">
+        <http:listener doc:name="POST /analyze-image"
+                       config-ref="HTTP_Listener_config"
+                       path="/analyze-image"
+                       allowedMethods="POST" />
+
+        <set-variable variableName="imageBase64"
+                      value="#[payload.imageBase64]"
+                      doc:name="Set imageBase64" />
+
+        <set-payload
+            value="#[output application/json --- {&quot;requests&quot;: [{&quot;image&quot;: {&quot;content&quot;: vars.imageBase64}, &quot;features&quot;: [{&quot;type&quot;: &quot;LABEL_DETECTION&quot;, &quot;maxResults&quot;: 10}, {&quot;type&quot;: &quot;TEXT_DETECTION&quot;, &quot;maxResults&quot;: 5}]}]}]"
+            doc:name="Build Vision request"
+            mimeType="application/json" />
+
+        <http:request method="POST"
+                      doc:name="POST Google Vision"
+                      config-ref="Google_Vision_Config"
+                      path="/v1/images:annotate">
+            <http:query-params>#[{ "key": p('google.vision.key') }]</http:query-params>
+        </http:request>
+
+        <ee:transform doc:name="Extract Vision results">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+var resp = payload.responses[0] default {}
+var labels = (resp.labelAnnotations default []) map (l) -> {
+    description: l.description,
+    score: l.score
+}
+var texts = (resp.textAnnotations default []) map (t) -> t.description
+var topLabel = labels[0].description default "Equipment"
+var detectedText = if (!isEmpty(texts)) texts[0] else ""
+---
+{
+    labels: labels,
+    detectedText: detectedText,
+    workOrderSuggestion: {
+        subject: "Inspection — " ++ topLabel,
+        description: "Équipement : " ++ topLabel ++ (if (detectedText != "") " | Texte : " ++ detectedText else "") ++ " | Google Vision AI",
+        equipmentType: topLabel,
+        serialNumber: detectedText
+    }
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+    </flow>
+</mule>
